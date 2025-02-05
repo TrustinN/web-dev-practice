@@ -17,6 +17,10 @@ body {
   /*   ) */
   /*   rgb(var(--background-start-rgb)); */
 }
+.markdown > * {
+  all: revert;
+  color: red;
+}
 
 @layer utilities {
   .text-balance {

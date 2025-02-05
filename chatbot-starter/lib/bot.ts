@@ -13,7 +13,11 @@ export async function bot(prompt: string, chatHistory: ChatHistory) {
     messages: chatHistory.data,
   });
 
-  const reply = await completion.choices[0]?.message?.content;
+  let reply = await completion.choices[0]?.message?.content;
+  reply = reply.replace(/\\\[/g, "$$$$");
+  reply = reply.replace(/\\\]/g, "$$$$");
+  reply = reply.replace(/\\\(/g, "$$");
+  reply = reply.replace(/\\\)/g, "$$");
 
   chatHistory.add("assistant", reply);
 

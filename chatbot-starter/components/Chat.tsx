@@ -1,5 +1,12 @@
 "use client";
 
+import React from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
+import "katex/dist/katex.min.css";
+
 import { useState } from "react";
 import { SendIcon } from "@/components/icons/SendIcon";
 import { UserIcon } from "@/components/icons/UserIcon";
@@ -13,7 +20,7 @@ type MessageItem =
       content: string;
     };
 
-function UserMessage({ content }: { content: string }) {
+const UserMessage = React.memo(({ content }: { content: string }) => {
   return (
     <div className="rounded flex flex-row space-x-2 p-2">
       <div className="rounded bg-white border drop-shadow-sm grow p-2">
@@ -24,20 +31,24 @@ function UserMessage({ content }: { content: string }) {
       </div>
     </div>
   );
-}
+});
 
-function AIMessage({ content: content }: { content: string }) {
+const AIMessage = React.memo(({ content: content }: { content: string }) => {
   return (
     <div className="rounded flex flex-row space-x-2 p-2">
       <div className="p-2 w-[48px]">
         <ChatGPTIcon />
       </div>
-      <div className="rounded bg-white border drop-shadow-sm grow p-2">
-        {content}
+      <div className="markdown rounded bg-white border drop-shadow-sm grow p-2">
+        <ReactMarkdown
+          children={content}
+          remarkPlugins={[remarkMath, remarkGfm]}
+          rehypePlugins={[rehypeKatex]}
+        />
       </div>
     </div>
   );
-}
+});
 
 export function Chat(props: { chatId: string }) {
   const { formRef, onKeyDown } = useEnterSubmit();
@@ -76,11 +87,11 @@ export function Chat(props: { chatId: string }) {
   return (
     <div>
       <div className="mx-auto sm:max-w-3xl sm:px-4 space-y-2 pt-12 pb-32">
-        {messages.map((message) => {
+        {messages.map((message, i) => {
           if (message.from === "USER") {
-            return <UserMessage content={message.content} />;
+            return <UserMessage key={i} content={message.content} />;
           } else {
-            return <AIMessage content={message.content} />;
+            return <AIMessage key={i} content={message.content} />;
           }
         })}
       </div>
