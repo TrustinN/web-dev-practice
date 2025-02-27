@@ -100,6 +100,7 @@ export function Chat(props: { chatId: string }) {
   const { formRef, onKeyDown } = useEnterSubmit();
   const [messages, setMessages] = useState<MessageItem[]>([]);
   const [userPrompt, setUserPrompt] = useState<string>("");
+  const [prereqs, setPrereqs] = useState<Record<string, string>>({});
 
   async function addUserMessage() {
     const addMessageRequest = new Request("/api/langchain/", {
@@ -115,39 +116,44 @@ export function Chat(props: { chatId: string }) {
       { from: "user", content: userPrompt },
     ]);
     const response = await fetch(addMessageRequest);
-    return response.body;
+    const json = response.json();
+    return json;
   }
 
-  async function addBotMessage(stream) {
-    setMessages((messages) => [
-      ...messages,
-      { from: "assistant", content: "" },
-    ]);
-
-    if (!stream) {
-      console.error("Failed to fetch stream");
-      return;
-    }
-    const streamIterator = readStream(stream);
-    while (true) {
-      const { value, done } = await streamIterator.next();
-      if (done) break;
-      setMessages((messages) => [
-        ...messages.slice(undefined, messages.length - 1),
-        { from: "assistant", content: value },
-      ]);
-    }
-  }
+  // async function addBotMessage(stream) {
+  //   setMessages((messages) => [
+  //     ...messages,
+  //     { from: "assistant", content: "" },
+  //   ]);
+  //
+  //   if (!stream) {
+  //     console.error("Failed to fetch stream");
+  //     return;
+  //   }
+  //   const streamIterator = readStream(stream);
+  //   while (true) {
+  //     const { value, done } = await streamIterator.next();
+  //     if (done) break;
+  //     setMessages((messages) => [
+  //       ...messages.slice(undefined, messages.length - 1),
+  //       { from: "assistant", content: value },
+  //     ]);
+  //   }
+  // }
 
   async function submitPrompt(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const stream = await addUserMessage();
+    const reply = await addUserMessage();
     setUserPrompt("");
-    await addBotMessage(stream);
+    setPrereqs(reply.formData);
+    setMessages((messages) => [
+      ...messages,
+      { from: "assistant", content: reply.content },
+    ]);
   }
 
   return (
-    <div>
+    <div className="relative">
       <div className="mx-auto sm:max-w-3xl sm:px-4 space-y-2 pt-12 pb-32">
         {messages.map((message, i) => {
           if (message.from === "user") {
@@ -180,6 +186,28 @@ export function Chat(props: { chatId: string }) {
                   <SendIcon />
                 </button>
               </div>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      <div className="fixed left-8 top-1/3">
+        <div className="mx-auto sm:max-w-2xl sm:px-4">
+          <div className="space-y-4 border-t backdrop-blur-lg drop-shadow-2xl bg-white/30 px-4 py-2 shadow-lg sm:rounded-xl sm:border md:py-4">
+            <form>
+              {Object.entries(prereqs).map(([key, value]) => {
+                return (
+                  <div key={key}>
+                    <label htmlFor={key}>{key + " :"}</label>
+                    <input
+                      type="text"
+                      id={key}
+                      name={key}
+                      defaultValue={value}
+                    />
+                  </div>
+                );
+              })}
             </form>
           </div>
         </div>

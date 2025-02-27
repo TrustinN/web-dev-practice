@@ -51,7 +51,7 @@ const typeEnum = ["soft", "technical"] as const;
 export const ResponseFormatter = z.object({
   type: z.enum(typeEnum).describe("Is this a soft or technical prompt?"),
   prereqs: z
-    .array(z.string())
+    .record(z.string(), z.string())
     .describe("A mapping of prerequisites to their known values."),
   response: z.string().describe("The answer to the query"),
 });
@@ -65,25 +65,23 @@ export const tavilyTool = new TavilySearchResults({
   apiKey: process.env["TAVILY_API_KEY"],
 });
 
+export const ResponseFormatter2 = z.object({
+  type: z.enum(typeEnum).describe("Is this a soft or technical prompt?"),
+  prereqs: z
+    .array(z.string())
+    .describe("A mapping of prerequisites to their known values."),
+  response: z.string().describe("The answer to the query"),
+});
+
 export const tavilyResponseTool = new DynamicStructuredTool<
-  typeof ResponseFormatter
+  typeof ResponseFormatter2
 >({
   description: "Search the web using the prerequisite knowledge given",
   func: (input): Promise<string> => {
-    const { type, response, prereqs } = ResponseFormatter.parse(input);
-    console.log(type);
-    console.log(response);
-    console.log(prereqs);
+    const { response, prereqs } = ResponseFormatter2.parse(input);
 
-    return tavilyTool.invoke({
-      name: "DataDrivenSearch",
-      args: {
-        type: type,
-        prereqs: prereqs,
-        query: response,
-      },
-    });
+    return tavilyTool.invoke(response + " " + prereqs.toString());
   },
   name: "DynamicTavilySearch",
-  schema: ResponseFormatter,
+  schema: ResponseFormatter2,
 });

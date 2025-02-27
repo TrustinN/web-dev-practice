@@ -1,12 +1,12 @@
-import { createAgent } from "@/app/api/config/agent";
 import {
-  responseFormatterTool,
+  createAgent,
+  ResponseFormatter,
   tavilyResponseTool,
 } from "@/app/api/config/agent";
 
 import { ChatOpenAI } from "@langchain/openai";
 import { Runnable, RunnableConfig } from "@langchain/core/runnables";
-import { BaseMessage, HumanMessage, AIMessage } from "@langchain/core/messages";
+import { BaseMessage, AIMessage } from "@langchain/core/messages";
 import { JsonOutputParser } from "@langchain/core/output_parsers";
 
 import { Annotation } from "@langchain/langgraph/web";
@@ -28,17 +28,9 @@ const AgentState = Annotation.Root({
     reducer: (x, y) => y ?? x ?? "user",
     default: () => "user",
   }),
-  type: Annotation<string>({
-    reducer: (x, y) => (y ? y : x),
-    default: () => "soft",
-  }),
-  cache: Annotation<Record<string, string>>({
-    reducer: (x, y) => {
-      return { ...x, ...y };
-    },
-    default: () => {
-      return {};
-    },
+  prereqs: Annotation<Record<string, string>>({
+    reducer: (x, y) => ({ ...x, ...y }),
+    default: () => ({}),
   }),
 });
 
@@ -54,26 +46,22 @@ const runAgentNode = async ({
   name: string;
   config?: RunnableConfig;
 }) => {
-  console.log("Currently running: ", name);
   const result = await agent.invoke(state, config);
-  let cache = {};
-  let type = state.type;
-  if (result.content != "") {
+
+  if (name == "Translator") {
     const data = await parser.invoke(result);
-    cache = data["prereqs"];
-    type = data["type"];
-    // console.log(data);
+    const { prereqs } = ResponseFormatter.parse(data);
+
+    return {
+      messages: [result],
+      sender: name,
+      prereqs: prereqs,
+    };
   }
-  // if (result.tool_calls) {
-  //   console.log(result.tool_calls);
-  // }
-  // console.log(result);
 
   return {
     messages: [result],
     sender: name,
-    type: type,
-    cache: cache,
   };
 };
 
@@ -82,7 +70,23 @@ const translatorAgent = await createAgent({
   llm: gpt,
   tools: [],
   systemMessage:
-    "You should return a JSON with the following fields: type, prereqs, response. The type field contains the type of the message you received. It is either soft or technical, technical means we require data to answer accurately. The prereqs field should be a table containing mappings for prerequisite fields we need to know to answer the prompt. These should all be instantiated to the empty string. Finally, the response field should contain your response to the user. If it is technical, the prereqs field is mandatory",
+    "You should return a JSON with the following fields: type, prereqs, response. The type field contains the type of the message you received. It is either soft or technical, technical means you need more info to answer the question. The prereqs field should be a table containing mappings for prerequisite fields we need to know to answer the prompt. These should all be instantiated to the empty string. Then fill out the prerequisite fields for which the USER has given CONCRETE data for. Finally, the response field should tell the user which prerequisite fields are missing if any. If it is technical, the prereqs field is mandatory.",
+});
+
+// Searches the web for a response to the user.
+const searchAgent = await createAgent({
+  llm: gpt,
+  tools: [tavilyResponseTool],
+  systemMessage:
+    "If all prerequisites are available, use the data you are given to do a search. Make sure to prefix your response with FINAL ANSWER",
+});
+
+// Formats the response to the user
+const responseAgent = await createAgent({
+  llm: gpt,
+  tools: [],
+  systemMessage:
+    "You should respond with what is passed in. You are required to prefix your response with DONE: <content> and pass it to the user. If there are any other prefixes like FINAL ANSWER, please remove it.",
 });
 
 const translatorNode = async (
@@ -97,14 +101,6 @@ const translatorNode = async (
   });
 };
 
-// Searches the web for a response to the user.
-const searchAgent = await createAgent({
-  llm: gpt,
-  tools: [tavilyResponseTool],
-  systemMessage:
-    "You should provide an accurate answer to the user. You are given the type of question (soft/technical) and prerequisite data from another agent. You should use both of these to formulate a search to return an accurate answer. Please put this in the response field of your tool call",
-});
-
 const searchNode = async (
   state: typeof AgentState.State,
   config?: RunnableConfig,
@@ -117,53 +113,71 @@ const searchNode = async (
   });
 };
 
-const tools = [tavilyResponseTool, responseFormatterTool];
+const responseNode = async (
+  state: typeof AgentState.State,
+  config?: RunnableConfig,
+) => {
+  return runAgentNode({
+    state: state,
+    agent: responseAgent,
+    name: "Responder",
+    config: config,
+  });
+};
+
+const tools = [tavilyResponseTool];
 const toolNode = new ToolNode<typeof AgentState.State>(tools);
 
 // Node to determine which agent to route state to
-function router(state: typeof AgentState.State) {
+async function router(state: typeof AgentState.State) {
   const messages = state.messages;
-  // console.log(messages);
   const lastMessage = messages[messages.length - 1] as AIMessage;
-  if (lastMessage?.tool_calls && lastMessage.tool_calls.length > 0) {
-    // The previous agent is invoking a tool
-    return "call_tool";
+  // console.log(lastMessage, "\n\n\n\n");
+  if (state.sender == "Translator") {
+    const prereqs = state.prereqs;
+    for (const val of Object.values(prereqs)) {
+      if (val === "") {
+        return "end";
+      }
+    }
   }
   if (
     typeof lastMessage.content === "string" &&
-    (lastMessage.content.includes("FINAL ANSWER") ||
-      lastMessage.content.includes("INSUFFICIENT DATA"))
+    lastMessage.content.includes("FINAL ANSWER")
   ) {
-    console.log("END RESPONSE");
-    // Any agent decided the work is done
     return "end";
   }
+
+  if (lastMessage?.tool_calls && lastMessage.tool_calls.length > 0) {
+    return "call_tool";
+  }
+
   return "continue";
 }
 
 const workflow = new StateGraph(AgentState)
   .addNode("Researcher", searchNode)
   .addNode("Translator", translatorNode)
+  .addNode("Responder", responseNode)
   .addNode("call_tool", toolNode);
 
 workflow.addConditionalEdges("Translator", router, {
   // We will transition to the other agent
   continue: "Researcher",
   call_tool: "call_tool",
-  end: END,
+  end: "Responder",
 });
 
 workflow.addConditionalEdges("Researcher", router, {
   // We will transition to the other agent
-  continue: "Translator",
+  continue: "Responder",
   call_tool: "call_tool",
-  end: END,
+  end: "Responder",
 });
 
 workflow.addConditionalEdges(
   "call_tool",
   (x) => {
-    // console.log("Sender: ", x.sender);
     return x.sender;
   },
   {
@@ -171,6 +185,8 @@ workflow.addConditionalEdges(
     Translator: "Researcher",
   },
 );
+
+workflow.addEdge("Responder", END);
 
 workflow.addEdge(START, "Translator");
 export const graph = workflow.compile();
